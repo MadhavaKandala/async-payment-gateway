@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Checkout</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; }
+        input, select { width: 100%; padding: 8px; box-sizing: border-box; }
+        button { width: 100%; padding: 10px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:disabled { background: #ccc; }
+        .error { color: red; font-size: 0.9em; margin-top: 5px; }
+        .success { color: green; text-align: center; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div id="checkout-form">
+        <h2>Pay Now</h2>
+        <div class="form-group">
+            <label>Amount</label>
+            <input type="text" id="amount" value="5000" readonly>
+            <small>INR 5000.00</small>
+        </div>
+
+        <div class="form-group">
+            <label>Payment Method</label>
+            <select id="method">
+                <option value="card">Credit Card</option>
+                <option value="upi">UPI</option>
+            </select>
+        </div>
+
+        <div class="form-group" id="vpa-group" style="display:none;">
+            <label>VPA (UPI ID)</label>
+            <input type="text" id="vpa" placeholder="user@upi">
+        </div>
+
+        <!-- Hidden inputs passed from URL -->
+        <input type="hidden" id="order-id">
+        <input type="hidden" id="api-key">
+
+        <button id="pay-button" data-test-id="pay-button">Pay</button>
+        <p id="error-message" class="error"></p>
+    </div>
+
+    <div id="processing-view" class="hidden">
+        <h3>Processing Payment...</h3>
+        <p>Please do not close this window.</p>
+    </div>
+
+    <div id="success-view" class="hidden success">
+        <h3>Payment Successful!</h3>
+        <p>Redirecting...</p>
+    </div>
+
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        const orderId = params.get('order_id');
+        const apiKey = params.get('key');
+        const API_URL = 'http://localhost:8000/api/v1'; // Hardcoded for Docker env usually calling localhost from browser
+        // NOTE: In Docker Desktop, localhost refers to host machine if accessed from Browser.
+        
+        document.getElementById('method').addEventListener('change', (e) => {
+            const vpaGroup = document.getElementById('vpa-group');
+            vpaGroup.style.display = e.target.value === 'upi' ? 'block' : 'none';
+        });
+
+        document.getElementById('pay-button').addEventListener('click', async () => {
+            const method = document.getElementById('method').value;
+            const vpa = document.getElementById('vpa').value;
+            const amount = 5000; // Hardcoded for demo
+            
+            if (method === 'upi' && !vpa) {
+                alert('Please enter VPA');
+                return;
+            }
+
+            // Show Processing
+            document.getElementById('checkout-form').classList.add('hidden');
+            document.getElementById('processing-view').classList.remove('hidden');
+
+            try {
+                // 1. Create Payment
+                // Secret is NOT available here. Only Public Key. 
+                // Wait, requirements said:
+                // "POST /api/v1/payments ... Headers: X-Api-Key... X-Api-Secret"
+                // The Checkout Page (Frontend) CANNOT hold the Secret.
+                // This implies:
+                // A) The merchant creates the payment order server-side FIRST (getting order_id or pay_id), then passes it to Checkout.
+                // B) Or the API Key alone is enough for creating payments?
+                // The API requires BOTH Key and Secret.
+                // AND "Embeddable SDK... options: { key: 'key_test...', orderId: '...' }"
+                // This means the SDK/Checkout Page only has the Key.
+                // BUT the "Create Payment Endpoint" requires Secret.
+                // CONTRADICTION / SECURITY ISSUE in prompt design?
+                // Or maybe the SDK calls a "Start Payment" endpoint that's public? 
+                // Or the prompt implies headers "Same as Deliverable 1".
+                // Usually, client-side only uses Publishable Key.
+                // "Create payment record in database... Enqueue ProcessPaymentJob... Return response...".
+                // Checks "Extract and validate API credentials...".
+                
+                // HYPOTHESIS: The prompt assumes the "Create Payment" /api/v1/payments is server-to-server.
+                // The SDK is for *Completing* the payment?
+                // "Process Payment Job... Fetch payment record... Update payment status".
+                // "Create JavaScript SDK... Usage: checkout = new PaymentGateway(...)".
+                // "SDK API... new PaymentGateway({ key, orderId })".
+                
+                // So, the Merchant creates the "Order" or "PaymentIntent" on their backend (Postman/Curl), getting an `order_id` (or using their own).
+                // Then they open the SDK with that `order_id`.
+                // The SDK iframe loads. The user enters details.
+                // The Checkout Page (in iframe) must Submit these details to the Gateway.
+                // Does it use the same `POST /api/v1/payments`?
+                // If yes, it needs the Secret. It can't have it.
+                // It must use a different endpoint OR the Gateway allows Public Key for this step?
+                // Or maybe `POST /api/v1/payments` allows Key-only if it's "Frontend Initiated"?
+                // The prompt says "Extract and validate API credentials (same as Deliverable 1)".
+                // And Deliverable 1 usually implies Key+Secret.
+                
+                // Solution: check `merchants` table. It has `api_key` and `api_secret`.
+                // Maybe I should add a check: If only `api_key` is provided -> Allowed for certain ops?
+                // Or maybe I should create a `POST /api/v1/checkout/pay` endpoint that only needs `api_key`?
+                // Let's create a *public* (or key-only) endpoint for the checkout page to use.
+                // `POST /api/v1/public/process`?
+                // Or modify `middleware/auth.js` to allow just Key for specific routes?
+                
+                // Let's create `POST /api/v1/checkout/confirm` that takes `api_key` and payment details.
+                // Or simply `POST /api/v1/payments` but relax the Secret requirement if it's a "Frontend" request?
+                // No, that's insecure.
+                // Let's assume the Merchant creates the Payment *Backend-Side* (getting `id`), and passes `id` to SDK?
+                // Prompt: "Usage... new PaymentGateway({ key, orderId, ... })".
+                // It passes `orderId`.
+                // Note: The `POST /payments` returns `id` (payment id).
+                // Maybe the SDK *Captures* it? No, capture is backend.
+                
+                // Let's look at the "Process Payment Job". It simulates processing.
+                // It needs to be triggered.
+                // If the Merchant Backend calls `POST /payments`, the job is *automatically* enqueued and processed IMMEDIATELY.
+                // "Create payment... Enqueue ProcessPaymentJob... Return response".
+                // So by the time the user sees the SDK, the payment might already be processing/processed?
+                // NO. The User enters Card Details/UPI in the SDK.
+                // So the `POST /payments` SHOULD happen *from the SDK* (or triggered by it).
+                
+                // REALISTIC FLOW for this assignment:
+                // 1. Merchant Backend calls `POST /orders` (Not specified but hinted in docs code-snippet).
+                //    Wait, docs snippet: `curl -X POST ... /api/v1/orders`.
+                //    But the `Create Payment Endpoint` is `POST /api/v1/payments`.
+                //    And Request Body has `order_id`.
+                // 2. So `POST /payments` IS the "Pay Now" action.
+                //    It requires `vpa` or card details (implied but not shown in prompt body example? Prompt example shows `vpa`).
+                //
+                // IF `POST /payments` requires Secret, the SDK cannot call it directly.
+                // BUT the prompt SDK Example shows: `checkout.open()`.
+                // And Iframe src: `.../checkout?order_id=xxx`.
+                //
+                // WORKAROUND: For this assignment, I will assume the `POST /payments` endpoint can be called with *only* `X-Api-Key` if I modify the Auth middleware, OR the Checkout Page proxies the request through a backend that has secrets (impossible here), OR I just create a separate "public" endpoint.
+                
+                // Let's create `POST /api/v1/checkout/process` in `routes/payments.js`.
+                // It will require `X-Api-Key` only.
+                // It will basically do what `POST /payments` does.
+                
+                const response = await fetch(`${API_URL}/checkout/process`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Api-Key': apiKey
+                    },
+                    body: JSON.stringify({
+                        order_id: orderId, // from URL
+                        amount: amount,
+                        currency: 'INR',
+                        method: method,
+                        vpa: vpa
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                   // Poll for status
+                   const paymentId = data.id;
+                   pollStatus(paymentId);
+                } else {
+                    showError(data.error);
+                }
+
+            } catch (err) {
+                showError(err.message);
+            }
+        });
+
+        async function pollStatus(paymentId) {
+            const interval = setInterval(async () => {
+                try {
+                    const res = await fetch(`${API_URL}/checkout/status/${paymentId}?key=${apiKey}`);
+                    const data = await res.json();
+                    
+                    if (data.status === 'success') {
+                        clearInterval(interval);
+                        document.getElementById('processing-view').classList.add('hidden');
+                        document.getElementById('success-view').classList.remove('hidden');
+                        
+                        // Notify Parent
+                        setTimeout(() => {
+                            window.parent.postMessage({
+                                type: 'payment_success',
+                                data: { paymentId: paymentId }
+                            }, '*');
+                        }, 1000);
+                    } else if (data.status === 'failed') {
+                        clearInterval(interval);
+                        showError('Payment Failed');
+                        window.parent.postMessage({
+                                type: 'payment_failed',
+                                data: { error: 'Payment Failed' }
+                            }, '*');
+                    }
+                } catch(e) {}
+            }, 2000);
+        }
+
+        function showError(msg) {
+            document.getElementById('processing-view').classList.add('hidden');
+            document.getElementById('checkout-form').classList.remove('hidden');
+            document.getElementById('error-message').innerText = msg;
+        }
+    </script>
+</body>
+</html>
